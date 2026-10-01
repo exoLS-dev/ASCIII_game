@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ASCII Baseball Rhythm</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&display=swap');
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #020802;
+            color: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            font-family: 'Fira Code', monospace;
+            touch-action: none;
+        }
+
+        #game-wrapper {
+            position: relative;
+            width: 100%;
+            max-width: 900px;
+            aspect-ratio: 16 / 9;
+            background-color: #030d03;
+            border: 2px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 0 40px rgba(0,0,0,0.9);
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(2, 8, 2, 0.9);
+            z-index: 10;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        h1 {
+            font-size: 2.8rem;
+            margin-bottom: 0;
+            letter-spacing: 2px;
+            text-align: center;
+            color: #fff;
+            text-shadow: 2px 2px 0px #000;
+        }
+
+        p {
+            font-size: 1.1rem;
+            color: #aaa;
+            text-align: center;
+            max-width: 80%;
+            line-height: 1.6;
+        }
+
+        button {
+            margin-top: 30px;
+            padding: 15px 40px;
+            background: #000;
+            color: #fff;
+            border: 2px solid #fff;
+            font-family: 'Fira Code', monospace;
+            font-size: 1.5rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+        }
+
+        button:active {
+            background: #fff;
+            color: #000;
+        }
+
+        .pulse {
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.6; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.05); }
+            100% { opacity: 0.6; transform: scale(1); }
+        }
+        
+        #rank-display {
+            font-size: 6rem;
+            font-weight: bold;
+            margin: 10px 0;
+            text-shadow: 0 0 20px currentColor;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-wrapper">
+        <canvas id="gameCanvas" width="900" height="506"></canvas>
+        
+        <div id="start-screen" class="overlay">
+            <h1>[ ASCII BASEBALL BEATS ]</h1>
+            <p>Batea justo cuando la bola cruce el Home Plate <b>&lt;|&gt;</b>.<br><br>Empiezas en rango <b>E</b>. Si bajas de <b>F</b>, estás fuera.</p>
+            <button id="start-btn" class="pulse">PLAY BALL</button>
+        </div>
+
+        <div id="game-over-screen" class="overlay hidden">
+            <h1 style="color: #ff0000;">[ STRIKEOUT ]</h1>
+            <p>Has bajado del rango F. Fuera del campo.</p>
+            <button id="restart-btn" class="pulse">REINICIAR</button>
+        </div>
+
+        <div id="victory-screen" class="overlay hidden">
+            <h1 style="color: #ffaa00;">[ PARTIDA PERFECTA ]</h1>
+            <p>Has superado los 150 lanzamientos.</p>
+            <div id="rank-display">RANK: S</div>
+            <button id="victory-restart-btn" class="pulse">NUEVA TEMPORADA</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const wrapper = document.getElementById('game-wrapper');
+
+        const UI = {
+            start: document.getElementById('start-screen'),
+            over: document.getElementById('game-over-screen'),
+            victory: document.getElementById('victory-screen'),
+            rankDisplay: document.getElementById('rank-display'),
+            startBtn: document.getElementById('start-btn'),
+            restartBtn: document.getElementById('restart-btn'),
+            vicRestartBtn: document.getElementById('victory-restart-btn')
+        };
+
+        const BPM = 120;
+        const BEAT_TIME = 60 / BPM; 
+        const TOTAL_BALLS = 150;
+        
+        const POS_HIT_ZONE = 180; // Posición X del Home Plate y Bateador
+        const POS_SPAWN = 800;    // Posición X del Pitcher
+        const TRAVEL_BEATS = 4;   // La bola tarda 4 beats
+        
+        const WINDOW_PERF = 0.08; // <= 80ms
+        const WINDOW_GOOD = 0.15; // <= 150ms
+        
+        const PTS_PERF = 15;
+        const PTS_GOOD = 5;
+        const PTS_MISS = -30;
+        const MAX_PTS = 650;
+
+        const RANKS = [
+            { min: 600, name: 'S', color: '#ffaa00', layerIdx: 6 },
+            { min: 500, name: 'A', color: '#ff00ff', layerIdx: 5 },
+            { min: 400, name: 'B', color: '#ffff00', layerIdx: 4 },
+            { min: 300, name: 'C', color: '#0088ff', layerIdx: 3 },
+            { min: 200, name: 'D', color: '#00ff00', layerIdx: 2 },
+            { min: 100, name: 'E', color: '#888888', layerIdx: 1 },
+            { min: 0,   name: 'F', color: '#ff0000', layerIdx: 0 }
+        ];
+
+        let state = 'START';
+        let audioCtx;
+        let points = 100; // Empieza en rango E (100-199)
+        let currentRank = RANKS[5];
+        
+        let notes = [];
+        let particles = [];
+        let floatingTexts = [];
+        
+        let startTime = 0;
+        let nextBeatTime = 0;
+        let currentBeat = 0;
+        
+        let isSwinging = false;
+        let swingTimer = 0;
+        let goCueTimer = 0;
+
+        // Audio Layers
+        let masterGain;
+        let layerGains = []; 
+
+        // Generación del entorno estático ASCII para no calcular en cada frame
+        let backgroundASCII = [];
+        const ASCII_ROWS = 15;
+        const ASCII_COLS = 50;
+        
+        function precomputeBackground() {
+            backgroundASCII = [];
+            for(let y=0; y<ASCII_ROWS; y++) {
+                let row = "";
+                for(let x=0; x<ASCII_COLS; x++) {
+                    if (y < 3) { // Gradas
+                        row += Math.random() > 0.3 ? "o " : "x ";
+                    } else if (y > 9 && y < 13) { // Zona de tierra
+                        row += Math.random() > 0.5 ? ". " : "_ ";
+                    } else { // Césped
+                        row += Math.random() > 0.5 ? '" ' : ", ";
+                    }
+                }
+                backgroundASCII.push(row);
+            }
+        }
+        precomputeBackground();
+
+        function initAudio() {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+            
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.6;
+            masterGain.connect(audioCtx.destination);
+
+            for(let i=0; i<7; i++) {
+                let g = audioCtx.createGain();
+                g.gain.value = (i <= currentRank.layerIdx) ? 1.0 : 0.0;
+                g.connect(masterGain);
+                layerGains.push(g);
+            }
+        }
+
+        function getRank(pts) {
+            for(let r of RANKS) {
+                if(pts >= r.min) return r;
+            }
+            return null;
+        }
+
+        function playTone(freq, type, dur, vol, destLayer, timeOffset = 0) {
+            if (!audioCtx) return;
+            const t = audioCtx.currentTime + timeOffset;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, t);
+            
+            gain.gain.setValueAtTime(vol, t);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+            
+            osc.connect(gain);
+            gain.connect(layerGains[destLayer]);
+            
+            osc.start(t);
+            osc.stop(t + dur);
+        }
+
+        function playSFX(type) {
+            if (!audioCtx) return;
+            const t = audioCtx.currentTime;
+            const dest = masterGain; 
+
+            if (type === 'go') {
+                const o1 = audioCtx.createOscillator();
+                const g1 = audioCtx.createGain();
+                o1.type = 'square'; o1.frequency.value = 1400;
+                g1.gain.setValueAtTime(0.3, t); g1.gain.linearRampToValueAtTime(0, t + 0.1);
+                o1.connect(g1); g1.connect(dest); o1.start(t); o1.stop(t+0.1);
+                
+                const o2 = audioCtx.createOscillator();
+                const g2 = audioCtx.createGain();
+                o2.type = 'square'; o2.frequency.value = 1400;
+                g2.gain.setValueAtTime(0.3, t + 0.15); g2.gain.linearRampToValueAtTime(0, t + 0.25);
+                o2.connect(g2); g2.connect(dest); o2.start(t+0.15); o2.stop(t+0.25);
+            } 
+            else if (type === 'perfect') {
+                playTone(987.77, 'sine', 0.4, 0.5, 0); // B5
+                playTone(1318.51, 'triangle', 0.2, 0.3, 0); // E6
+            } 
+            else if (type === 'good') {
+                playTone(659.25, 'triangle', 0.2, 0.3, 0); // E5
+            } 
+            else if (type === 'miss') {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(120, t);
+                osc.frequency.linearRampToValueAtTime(30, t + 0.3);
+                gain.gain.setValueAtTime(0.6, t);
+                gain.gain.linearRampToValueAtTime(0.01, t + 0.3);
+                osc.connect(gain); gain.connect(dest);
+                osc.start(t); osc.stop(t + 0.3);
+            }
+        }
+
+        function scheduleMusic() {
+            while (nextBeatTime < audioCtx.currentTime + 0.1) {
+                for(let i=0; i<7; i++) {
+                    const targetGain = (i <= currentRank.layerIdx) ? 1.0 : 0.0;
+                    layerGains[i].gain.setTargetAtTime(targetGain, nextBeatTime, 0.05);
+                }
+
+                // L0 (F): Kick Drum
+                const kick = audioCtx.createOscillator();
+                const kickGain = audioCtx.createGain();
+                kick.frequency.setValueAtTime(150, nextBeatTime);
+                kick.frequency.exponentialRampToValueAtTime(20, nextBeatTime + 0.2);
+                kickGain.gain.setValueAtTime(0.8, nextBeatTime);
+                kickGain.gain.exponentialRampToValueAtTime(0.01, nextBeatTime + 0.2);
+                kick.connect(kickGain); kickGain.connect(layerGains[0]);
+                kick.start(nextBeatTime); kick.stop(nextBeatTime + 0.2);
+
+                // L1 (E): HiHat
+                playTone(4000, 'square', 0.05, 0.1, 1, BEAT_TIME / 2);
+
+                // L2 (D): Snare
+                if (currentBeat % 2 !== 0) {
+                    playTone(250, 'triangle', 0.2, 0.4, 2);
+                    playTone(1200, 'square', 0.1, 0.1, 2);
+                }
+
+                // L3 (C): Bassline
+                const bassNote = (Math.floor(currentBeat / 4) % 2 === 0) ? 65.41 : 87.31; 
+                playTone(bassNote, 'sawtooth', 0.3, 0.5, 3);
+                playTone(bassNote, 'sawtooth', 0.2, 0.3, 3, BEAT_TIME/2);
+
+                // L4 (B): Synth Chords
+                if (currentBeat % 2 === 0) {
+                    const root = (Math.floor(currentBeat / 4) % 2 === 0) ? 261.63 : 349.23; 
+                    playTone(root, 'triangle', 0.8, 0.2, 4);
+                    playTone(root * 1.25, 'triangle', 0.8, 0.2, 4); 
+                    playTone(root * 1.5, 'triangle', 0.8, 0.2, 4);  
+                }
+
+                // L5 (A): Fast Arp
+                const arpBase = 523.25; 
+                const arpNotes = [arpBase, arpBase*1.25, arpBase*1.5, arpBase*2];
+                for(let i=0; i<4; i++){
+                    playTone(arpNotes[i], 'sine', 0.1, 0.15, 5, i * (BEAT_TIME/4));
+                }
+
+                // L6 (S): Melody
+                const melNotes = [523.25, 587.33, 659.25, 783.99]; 
+                const melNote = melNotes[currentBeat % 4];
+                playTone(melNote, 'square', 0.4, 0.15, 6);
+
+                nextBeatTime += BEAT_TIME;
+                currentBeat++;
+            }
+        }
+
+        function generateLevel() {
+            notes = [];
+            let targetBeat = 8; 
+            for (let i = 0; i < TOTAL_BALLS; i++) {
+                notes.push({
+                    targetTime: 0, 
+                    targetBeat: targetBeat,
+                    hit: false,
+                    missed: false,
+                    cued: false
+                });
+                const step = [2, 2, 3, 4][Math.floor(Math.random() * 4)];
+                targetBeat += step;
+            }
+        }
+
+        function createParticles(x, y, color, char = '*') {
+            for(let i=0; i<12; i++){
+                particles.push({
+                    x: x, y: y,
+                    vx: (Math.random() - 0.5) * 12,
+                    vy: (Math.random() - 0.5) * 12 - 3,
+                    life: 1.0,
+                    char: char,
+                    color: color
+                });
+            }
+        }
+
+        function createFloatingText(x, y, text, color) {
+            floatingTexts.push({
+                x: x, y: y,
+                text: text, color: color,
+                life: 1.0, vy: -1.5
+            });
+        }
+
+        function handleTap() {
+            if (state !== 'PLAY') return;
+            
+            isSwinging = true;
+            swingTimer = 10; // Frames que dura la animación de bateo
+            
+            const now = audioCtx.currentTime;
+            let closest = null;
+            let minDiff = Infinity;
+            
+            for (let note of notes) {
+                if (!note.hit && !note.missed) {
+                    const diff = Math.abs(note.targetTime - now);
+                    if (diff < minDiff) {
+                        minDiff = diff;
+                        closest = note;
+                    }
+                }
+            }
+            
+            // Evaluamos la colisión sobre el Home Plate
+            if (closest && minDiff <= 0.3) {
+                if (minDiff <= WINDOW_PERF) {
+                    closest.hit = true;
+                    addPoints(PTS_PERF);
+                    playSFX('perfect');
+                    createParticles(POS_HIT_ZONE, 390, '#fff', 'o');
+                    createFloatingText(POS_HIT_ZONE, 330, "HOME RUN!", currentRank.color);
+                } else if (minDiff <= WINDOW_GOOD) {
+                    closest.hit = true;
+                    addPoints(PTS_GOOD);
+                    playSFX('good');
+                    createParticles(POS_HIT_ZONE, 390, '#aaa', '-');
+                    createFloatingText(POS_HIT_ZONE, 330, "HIT", '#ccc');
+                } else {
+                    closest.missed = true; 
+                    addPoints(PTS_MISS);
+                    playSFX('miss');
+                    createFloatingText(POS_HIT_ZONE, 330, "STRIKE", '#f00');
+                }
+            } else {
+                addPoints(PTS_MISS);
+                playSFX('miss');
+                createFloatingText(POS_HIT_ZONE, 330, "MISS", '#f00');
+            }
+        }
+
+        function addPoints(pts) {
+            points += pts;
+            if (points > MAX_PTS) points = MAX_PTS;
+            
+            const newRank = getRank(points);
+            if (!newRank) {
+                gameOver();
+            } else {
+                currentRank = newRank;
+                wrapper.style.borderColor = currentRank.color;
+                wrapper.style.boxShadow = `0 0 30px ${currentRank.color}66`;
+            }
+        }
+
+        function gameLoop() {
+            if (state !== 'PLAY') return;
+            
+            const now = audioCtx.currentTime;
+            scheduleMusic();
+            
+            // Limpiar Canvas
+            ctx.fillStyle = '#030d03'; // Fondo base verde muy oscuro
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.font = 'bold 22px "Fira Code", monospace';
+            ctx.textBaseline = 'middle';
+            
+            // 1. Dibujar Entorno Estático ASCII
+            for(let y=0; y<ASCII_ROWS; y++) {
+                let lineY = 40 + y * 30;
+                if (y < 3) ctx.fillStyle = '#555'; // Público
+                else if (y > 9 && y < 13) ctx.fillStyle = '#5c3a21'; // Tierra
+                else ctx.fillStyle = '#1c5c1c'; // Césped
+                
+                ctx.textAlign = 'left';
+                ctx.fillText(backgroundASCII[y], 10, lineY);
+            }
+
+            // 2. Scoreboard (Marcador del Estadio)
+            const scoreY = 80;
+            ctx.fillStyle = '#222';
+            ctx.fillRect(canvas.width/2 - 120, scoreY - 40, 240, 90);
+            ctx.strokeStyle = currentRank.color;
+            ctx.lineWidth = 4;
+            ctx.strokeRect(canvas.width/2 - 120, scoreY - 40, 240, 90);
+            
+            ctx.fillStyle = '#fff';
+            ctx.textAlign = 'center';
+            ctx.fillText("+-------------+", canvas.width/2, scoreY - 25);
+            ctx.fillStyle = currentRank.color;
+            ctx.font = 'bold 36px "Fira Code", monospace';
+            ctx.fillText(`STYLE: ${currentRank.name}`, canvas.width/2, scoreY + 5);
+            ctx.font = 'bold 22px "Fira Code", monospace';
+            ctx.fillStyle = '#fff';
+            ctx.fillText("+-------------+", canvas.width/2, scoreY + 35);
+
+            // 3. Pitcher (Montículo) a la derecha
+            ctx.fillStyle = '#ddd';
+            ctx.textAlign = 'center';
+            ctx.fillText(" \\(•_•) ", POS_SPAWN, 370);
+            ctx.fillText("   | |  ", POS_SPAWN, 395);
+            ctx.fillText("  /   \\ ", POS_SPAWN, 420);
+
+            // 4. Home Plate (La línea del timing)
+            ctx.fillStyle = '#fff';
+            ctx.fillText("  <|>  ", POS_HIT_ZONE, 430);
+            ctx.fillStyle = '#555';
+            ctx.fillText("-------", POS_HIT_ZONE, 450); // Borde del home
+
+            // 5. Bateador a la izquierda (Animación de Swing)
+            ctx.fillStyle = currentRank.color; // El bateador brilla del color del rango
+            if (isSwinging) {
+                ctx.fillText(" [-o-] ", POS_HIT_ZONE - 40, 370);
+                ctx.fillText("  |\\==O", POS_HIT_ZONE - 40, 395); // Swing!
+                ctx.fillText(" / \\   ", POS_HIT_ZONE - 40, 420);
+                swingTimer--;
+                if (swingTimer <= 0) isSwinging = false;
+            } else {
+                ctx.fillText(" [-_-] ", POS_HIT_ZONE - 40, 370);
+                ctx.fillText(" /|\\|  ", POS_HIT_ZONE - 40, 395); // Bate en reposo
+                ctx.fillText(" / \\   ", POS_HIT_ZONE - 40, 420);
+            }
+
+            // 6. Lógica y Dibujado de Pelotas
+            let activeNotesCount = 0;
+            ctx.font = 'bold 28px "Fira Code", monospace';
+            
+            for (let i = 0; i < notes.length; i++) {
+                const note = notes[i];
+                
+                if (note.hit || note.targetTime < now - 1) {
+                    if (!note.hit && !note.missed && note.targetTime < now - WINDOW_GOOD) {
+                        note.missed = true;
+                        addPoints(PTS_MISS);
+                        playSFX('miss');
+                        createFloatingText(POS_HIT_ZONE, 330, "STRIKE", '#f00');
+                    }
+                    continue; 
+                }
+                
+                activeNotesCount++;
+
+                // Cue Visual: "GO!"
+                if (!note.cued && now >= note.targetTime - BEAT_TIME) {
+                    note.cued = true;
+                    playSFX('go');
+                    goCueTimer = 15; 
+                }
+                
+                const totalTravelTime = TRAVEL_BEATS * BEAT_TIME;
+                const speedScale = (POS_SPAWN - POS_HIT_ZONE) / totalTravelTime;
+                
+                const timeRemaining = note.targetTime - now;
+                const currentX = POS_HIT_ZONE + (timeRemaining * speedScale);
+                
+                // Dibujar Bola (Lanzamiento)
+                if (currentX <= POS_SPAWN + 20 && currentX >= -50) {
+                    ctx.fillStyle = note.missed ? '#555' : '#fff';
+                    ctx.textAlign = 'center';
+                    // Pequeña curva (Y) para simular arco de lanzamiento
+                    const arcOffset = Math.sin((timeRemaining / totalTravelTime) * Math.PI) * 40;
+                    ctx.fillText("O", currentX, 395 - arcOffset);
+                }
+            }
+            
+            // Check Victoria
+            if (activeNotesCount === 0 && now > notes[notes.length - 1].targetTime + 1.5) {
+                victory();
+                return;
+            }
+
+            
+            // Texto "GO!" Flotante
+            if (goCueTimer > 0) {
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 36px "Fira Code", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText("! GO !", POS_HIT_ZONE + 120, 300);
+                goCueTimer--;
+            }
+
+            // Partículas de Bateo
+            ctx.font = 'bold 20px "Fira Code", monospace';
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.4; // Gravedad
+                p.life -= 0.04;
+                if (p.life <= 0) { particles.splice(i, 1); continue; }
+                
+                ctx.fillStyle = p.color;
+                ctx.globalAlpha = p.life;
+                ctx.fillText(p.char, p.x, p.y);
+            }
+            ctx.globalAlpha = 1.0;
+
+            // Textos de Feedback (HOME RUN, STRIKE)
+            for (let i = floatingTexts.length - 1; i >= 0; i--) {
+                let f = floatingTexts[i];
+                f.y += f.vy;
+                f.life -= 0.02;
+                if (f.life <= 0) { floatingTexts.splice(i, 1); continue; }
+                
+                ctx.fillStyle = f.color;
+                ctx.globalAlpha = f.life;
+                ctx.font = 'bold 28px "Fira Code", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(f.text, f.x, f.y);
+            }
+            ctx.globalAlpha = 1.0;
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function startGame() {
+            if (!audioCtx) initAudio();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            
+            state = 'PLAY';
+            points = 100;
+            currentRank = RANKS[5]; 
+            currentBeat = 0;
+            particles = [];
+            floatingTexts = [];
+            
+            wrapper.style.borderColor = currentRank.color;
+            wrapper.style.boxShadow = `0 0 30px ${currentRank.color}66`;
+            
+            UI.start.classList.add('hidden');
+            UI.over.classList.add('hidden');
+            UI.victory.classList.add('hidden');
+            
+            startTime = audioCtx.currentTime + 1.5; 
+            nextBeatTime = startTime;
+            
+            generateLevel();
+            notes.forEach(n => {
+                n.targetTime = startTime + (n.targetBeat * BEAT_TIME);
+            });
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        function gameOver() {
+            state = 'OVER';
+            UI.over.classList.remove('hidden');
+            wrapper.style.borderColor = '#ff0000';
+            for(let g of layerGains) g.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
+        }
+
+        function victory() {
+            state = 'VICTORY';
+            UI.rankDisplay.innerText = `RANK: ${currentRank.name}`;
+            UI.rankDisplay.style.color = currentRank.color;
+            UI.victory.classList.remove('hidden');
+            for(let g of layerGains) g.gain.setTargetAtTime(0, audioCtx.currentTime, 1.0);
+        }
+
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault(); 
+            handleTap();
+        }, { passive: false });
+        
+        canvas.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            handleTap();
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && state === 'PLAY') {
+                e.preventDefault();
+                handleTap();
+            }
+        });
+
+        UI.startBtn.addEventListener('click', startGame);
+        UI.restartBtn.addEventListener('click', startGame);
+        UI.vicRestartBtn.addEventListener('click', startGame);
+
+    </script>
+</body>
+</html>
